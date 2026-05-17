@@ -5,6 +5,8 @@ import * as path from "path"
 import { appTwoThrows, assertPack, linuxDirTarget, modifyPackageJson, verifyAsarFileTree } from "./helpers/packTester"
 import { ELECTRON_VERSION } from "./helpers/testConfig"
 import { copy, mkdir, outputFile, readJson, rm, symlink, writeJson } from "fs-extra"
+import { assertThat } from "./helpers/fileAssert"
+import { dump } from "js-yaml"
 
 describe.ifNotWindows("node_module collectors", () => {
   test("yarn workspace", ({ expect }) =>
@@ -98,8 +100,7 @@ describe.ifNotWindows("node_module collectors", () => {
         projectDirCreated: async (projectDir, _tmpDir, testEnv) => {
           await modifyPackageJson(projectDir, data => {
             data.dependencies = {
-              "electron-updater": "6.8.3",
-              express: "4.0.0",
+              "is-odd": "3.0.1",
             }
             data.devDependencies = {
               electron: ELECTRON_VERSION,
@@ -150,7 +151,7 @@ describe.ifNotWindows("node_module collectors", () => {
         projectDirCreated: async (projectDir, _tmpDir, testEnv) => {
           await modifyPackageJson(projectDir, data => {
             data.dependencies = {
-              "electron-updater": "6.8.3",
+              "is-odd": "3.0.1",
             }
             data.devDependencies = {
               electron: ELECTRON_VERSION,
@@ -472,7 +473,7 @@ describe.ifNotWindows("node_module collectors", () => {
               "electron-clear-data": "1.0.5",
             }
             data.devDependencies = {
-              electron: "34.0.2",
+              electron: ELECTRON_VERSION,
             }
           })
           await spawn("yarn", ["install"], {
@@ -642,6 +643,40 @@ describe.ifNotWindows("node_module collectors", () => {
       }
     ))
 
+  // https://github.com/electron-userland/electron-builder/issues/9711
+  test("pnpm v11 workspace", ({ expect }) =>
+    assertPack(
+      expect,
+      "test-app-yarn-several-workspace",
+      {
+        targets: linuxDirTarget,
+        projectDir: "packages/test-app",
+      },
+      {
+        storeDepsLockfileSnapshot: true,
+        packageManager: PM.PNPM,
+        projectDirCreated: async projectDir => {
+          return Promise.all([
+            modifyPackageJson(projectDir, data => {
+              data.packageManager = "pnpm@11.0.9"
+            }),
+            modifyPackageJson(path.join(projectDir, "packages", "test-app"), data => {
+              data.dependencies = {
+                debug: "4.4.3",
+              }
+              data.devDependencies = {
+                electron: ELECTRON_VERSION,
+              }
+            }),
+            // pnpm v11 requires explicit build script approval via allowBuilds in pnpm-workspace.yaml
+            // (replaces the removed onlyBuiltDependencies / neverBuiltDependencies settings)
+            outputFile(path.join(projectDir, "pnpm-workspace.yaml"), dump({ packages: ["packages/*"], allowBuilds: { electron: true } })),
+          ])
+        },
+        packed: context => verifyAsarFileTree(expect, context.getResources(Platform.LINUX)),
+      }
+    ))
+
   test("yarn berry version conflict with hoisted dependencies", ({ expect }) =>
     assertPack(
       expect,
@@ -663,6 +698,30 @@ describe.ifNotWindows("node_module collectors", () => {
           })
         },
         packed: context => verifyAsarFileTree(expect, context.getResources(Platform.LINUX)),
+      }
+    ))
+
+  test("yarn berry using extraMetadata.name should not unpack workspace app", ({ expect }) =>
+    assertPack(
+      expect,
+      "test-app-yarn-workspace",
+      {
+        targets: linuxDirTarget,
+        projectDir: "packages/test-app",
+        config: {
+          extraMetadata: {
+            name: "overridden-app-name",
+          },
+        },
+      },
+      {
+        storeDepsLockfileSnapshot: true,
+        packageManager: PM.YARN_BERRY,
+        packed: async context => {
+          const resources = context.getResources(Platform.LINUX)
+
+          await assertThat(expect, path.join(resources, "app.asar.unpacked", "node_modules", "test-app")).doesNotExist()
+        },
       }
     ))
 })
